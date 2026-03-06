@@ -2,7 +2,7 @@
 
 [中文说明](#中文说明) | [English](#english)
 
-![App Preview](./assets/repo-preview.svg)
+![App Screenshot](./assets/app-screenshot.png)
 
 ## English
 
