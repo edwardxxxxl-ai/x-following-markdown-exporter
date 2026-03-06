@@ -12,19 +12,16 @@
         <p class="eyebrow">Local Arc Workflow</p>
         <h1>X Following Markdown Exporter</h1>
         <p class="lede">
-          Input an X username, reuse your logged-in Arc session, and export that account's following
-          list as Markdown.
+          Input one or more X usernames, reuse your logged-in Arc session, and analyze the shared
+          follow graph as Markdown, JSON, and a research brief.
         </p>
       </section>
 
       <section class="panel">
         <form id="export-form" class="form">
           <label class="field">
-            <span>X username</span>
-            <div class="input-wrap">
-              <span class="prefix">@</span>
-              <input id="username" name="username" type="text" placeholder="odysseyml" autocomplete="off" maxlength="15" required />
-            </div>
+            <span>X usernames</span>
+            <textarea id="username" name="username" placeholder="odysseyml&#10;reflexrobot&#10;odysseyml" autocomplete="off" required></textarea>
           </label>
           <button id="submit-button" type="submit">Export following list</button>
         </form>
@@ -44,13 +41,34 @@
           <div>
             <p class="output-label">Output</p>
             <h2 id="output-title">No export yet</h2>
+            <p id="output-meta" class="output-meta">Markdown, JSON, and brief will appear here.</p>
+            <p id="source-summary" class="output-meta"></p>
           </div>
           <div class="actions">
             <button id="copy-button" type="button" disabled>Copy</button>
-            <button id="download-button" type="button" disabled>Download .md</button>
+            <button id="download-button" type="button" disabled>Download</button>
           </div>
         </div>
         <p id="status" class="status idle">Ready.</p>
+        <div id="insights" class="insights" hidden>
+          <div class="insight-card">
+            <p class="insight-label">Top topics</p>
+            <div id="topic-summary" class="chip-row"></div>
+          </div>
+          <div class="insight-card">
+            <p class="insight-label">Shared overlap</p>
+            <div id="overlap-accounts" class="mini-list"></div>
+          </div>
+          <div class="insight-card">
+            <p class="insight-label">Hidden nodes</p>
+            <div id="notable-accounts" class="mini-list"></div>
+          </div>
+        </div>
+        <div class="view-toggle" id="view-toggle">
+          <button class="view-button active" data-view="markdown" type="button">Markdown</button>
+          <button class="view-button" data-view="json" type="button">JSON</button>
+          <button class="view-button" data-view="brief" type="button">Research brief</button>
+        </div>
         <pre id="output" class="output"></pre>
       </section>
     </main>
@@ -63,10 +81,86 @@
       const downloadButton = document.getElementById("download-button");
       const output = document.getElementById("output");
       const outputTitle = document.getElementById("output-title");
+      const outputMeta = document.getElementById("output-meta");
+      const sourceSummary = document.getElementById("source-summary");
       const status = document.getElementById("status");
+      const insights = document.getElementById("insights");
+      const topicSummary = document.getElementById("topic-summary");
+      const overlapAccounts = document.getElementById("overlap-accounts");
+      const notableAccounts = document.getElementById("notable-accounts");
+      const viewButtons = Array.from(document.querySelectorAll(".view-button"));
 
-      let currentMarkdown = "";
-      let currentFilename = "x-following.md";
+      let currentView = "markdown";
+      let currentOutputs = {
+        markdown: "",
+        json: "",
+        brief: "",
+      };
+      let currentFiles = {
+        markdown: "x-following.md",
+        json: "x-following.json",
+        brief: "x-following-brief.md",
+      };
+
+      function renderOutput() {
+        output.textContent = currentOutputs[currentView] || "";
+      }
+
+      function setView(view) {
+        currentView = view;
+        for (const button of viewButtons) {
+          button.classList.toggle("active", button.dataset.view === view);
+        }
+        downloadButton.textContent = view === "json" ? "Download .json" : "Download .md";
+        renderOutput();
+      }
+
+      function renderInsights(payload) {
+        const topics = payload.outputs.topicSummary || [];
+        const overlaps = payload.outputs.overlapProfiles || [];
+        const notable = payload.outputs.notableAccounts || [];
+        topicSummary.innerHTML = "";
+        overlapAccounts.innerHTML = "";
+        notableAccounts.innerHTML = "";
+
+        for (const item of topics) {
+          const chip = document.createElement("span");
+          chip.className = "chip";
+          chip.textContent = item.label + " · " + item.count;
+          topicSummary.appendChild(chip);
+        }
+
+        for (const account of overlaps.slice(0, 8)) {
+          const row = document.createElement("div");
+          row.className = "mini-list-item";
+          row.textContent =
+            "@" +
+            account.screen_name +
+            " — followed by " +
+            account.followed_by_count +
+            "/" +
+            payload.usernames.length +
+            (account.bio ? " | " + account.bio : "");
+          overlapAccounts.appendChild(row);
+        }
+
+        for (const account of notable) {
+          const row = document.createElement("div");
+          row.className = "mini-list-item";
+          row.textContent =
+            "@" +
+            account.screen_name +
+            " — followed by " +
+            account.followed_by_count +
+            "/" +
+            payload.usernames.length +
+            " | " +
+            (account.bio || account.name || "No bio");
+          notableAccounts.appendChild(row);
+        }
+
+        insights.hidden = topics.length === 0 && overlaps.length === 0 && notable.length === 0;
+      }
 
       function setStatus(message, mode) {
         status.textContent = message;
@@ -80,64 +174,80 @@
 
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
-        const username = usernameInput.value.trim().replace(/^@+/, "");
-        if (!username) {
-          setStatus("Enter a username first.", "error");
+        const usernames = usernameInput.value.trim();
+        if (!usernames) {
+          setStatus("Enter at least one username first.", "error");
           return;
         }
 
         setBusy(true);
-        setStatus("Switching through Arc and fetching the following list...", "loading");
+        setStatus("Switching through Arc and analyzing multiple follow graphs...", "loading");
         output.textContent = "";
         outputTitle.textContent = "Export in progress";
+        outputMeta.textContent = "Collecting bios, counts, overlap, and topic signals.";
+        sourceSummary.textContent = "";
         copyButton.disabled = true;
         downloadButton.disabled = true;
+        insights.hidden = true;
 
         try {
           const response = await fetch("/api/export", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ username }),
+            body: JSON.stringify({ usernames }),
           });
           const payload = await response.json();
           if (!response.ok) {
             throw new Error(payload.error || "Export failed");
           }
 
-          currentMarkdown = payload.markdown;
-          currentFilename = payload.filename;
-          output.textContent = payload.markdown;
-          outputTitle.textContent = "@" + payload.username + " · " + payload.total + " accounts";
+          currentOutputs = payload.outputs;
+          currentFiles = payload.files;
+          renderOutput();
+          outputTitle.textContent = payload.usernames.length + " seeds · " + payload.total + " accounts · " + payload.overlapCount + " overlaps";
+          outputMeta.textContent = "Includes bio, followers, topic labels, overlap count, JSON export, and a research brief.";
+          sourceSummary.textContent = "Sources: " + payload.usernames.map((name) => "@" + name).join(", ");
+          renderInsights(payload);
           setStatus("Export complete.", "success");
           copyButton.disabled = false;
           downloadButton.disabled = false;
         } catch (error) {
-          currentMarkdown = "";
+          currentOutputs = { markdown: "", json: "", brief: "" };
           outputTitle.textContent = "Export failed";
+          outputMeta.textContent = "No structured output available.";
+          sourceSummary.textContent = "";
           output.textContent = "";
+          insights.hidden = true;
           setStatus(error.message, "error");
         } finally {
           setBusy(false);
         }
       });
 
+      for (const button of viewButtons) {
+        button.addEventListener("click", () => setView(button.dataset.view));
+      }
+
       copyButton.addEventListener("click", async () => {
-        if (!currentMarkdown) return;
-        await navigator.clipboard.writeText(currentMarkdown);
-        setStatus("Markdown copied to clipboard.", "success");
+        if (!currentOutputs[currentView]) return;
+        await navigator.clipboard.writeText(currentOutputs[currentView]);
+        setStatus(currentView + " copied to clipboard.", "success");
       });
 
       downloadButton.addEventListener("click", () => {
-        if (!currentMarkdown) return;
-        const blob = new Blob([currentMarkdown], { type: "text/markdown;charset=utf-8" });
+        if (!currentOutputs[currentView]) return;
+        const mime = currentView === "json" ? "application/json;charset=utf-8" : "text/markdown;charset=utf-8";
+        const blob = new Blob([currentOutputs[currentView]], { type: mime });
         const url = URL.createObjectURL(blob);
         const anchor = document.createElement("a");
         anchor.href = url;
-        anchor.download = currentFilename;
+        anchor.download = currentFiles[currentView];
         anchor.click();
         URL.revokeObjectURL(url);
-        setStatus("Markdown download started.", "success");
+        setStatus(currentView + " download started.", "success");
       });
+
+      setView("markdown");
     </script>
   </body>
 </html>

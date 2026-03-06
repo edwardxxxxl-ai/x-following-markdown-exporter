@@ -8,6 +8,18 @@ const PORT = process.env.PORT || 4321;
 const PUBLIC_DIR = path.join(__dirname, "public");
 const BEARER_TOKEN =
   "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs=1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA";
+const EXPORT_KEY = "codex_following_export_payload";
+
+const TOPIC_RULES = [
+  { label: "AI", patterns: [" ai ", "llm", "agent", "genai", "machine learning", "artificial intelligence"] },
+  { label: "Robotics", patterns: ["robot", "robotics", "humanoid", "autonomy", "autonomous"] },
+  { label: "Infra", patterns: ["infra", "platform", "api", "developer tools", "open source", "tooling"] },
+  { label: "Investing", patterns: ["investor", "vc", "venture", "angel", "capital", "fund"] },
+  { label: "Research", patterns: ["research", "scientist", "lab", "phd", "paper", "alignment"] },
+  { label: "Design", patterns: ["design", "designer", "creative", "visual", "brand"] },
+  { label: "Media", patterns: ["writer", "journalist", "newsletter", "media", "podcast"] },
+  { label: "Founder", patterns: ["founder", "co-founder", "building", "startup", "entrepreneur"] },
+];
 
 function sendJson(res, statusCode, payload) {
   const body = JSON.stringify(payload);
@@ -65,8 +77,163 @@ function sanitizeUsername(value) {
   return trimmed;
 }
 
+function sanitizeUsernameList(value) {
+  const raw = Array.isArray(value)
+    ? value
+    : String(value || "")
+        .split(/[\n,\s]+/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+
+  const usernames = [...new Set(raw.map(sanitizeUsername))];
+  if (usernames.length === 0) {
+    throw new Error("Enter at least one username.");
+  }
+  if (usernames.length > 10) {
+    throw new Error("Use up to 10 usernames per export.");
+  }
+  return usernames;
+}
+
 function escapeForAppleScript(value) {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function normalizeBio(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function classifyTopics(profile) {
+  const haystack = ` ${String(profile.name || "").toLowerCase()} ${String(profile.bio || "").toLowerCase()} `;
+  const labels = [];
+  for (const rule of TOPIC_RULES) {
+    if (rule.patterns.some((pattern) => haystack.includes(pattern))) {
+      labels.push(rule.label);
+    }
+  }
+  return labels;
+}
+
+function pickNotableAccounts(profiles) {
+  return [...profiles]
+    .sort((left, right) => {
+      if ((right.followed_by_count || 0) !== (left.followed_by_count || 0)) {
+        return (right.followed_by_count || 0) - (left.followed_by_count || 0);
+      }
+      if (left.followers_count !== right.followers_count) {
+        return left.followers_count - right.followers_count;
+      }
+      return left.screen_name.localeCompare(right.screen_name);
+    })
+    .slice(0, 5)
+    .map((profile) => ({
+      screen_name: profile.screen_name,
+      name: profile.name,
+      bio: profile.bio,
+      followers_count: profile.followers_count,
+      topic_labels: profile.topic_labels,
+      followed_by_count: profile.followed_by_count || 0,
+      followed_by: profile.followed_by || [],
+    }));
+}
+
+function buildTopicSummary(profiles) {
+  const counts = new Map();
+  for (const profile of profiles) {
+    for (const label of profile.topic_labels) {
+      counts.set(label, (counts.get(label) || 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, 6)
+    .map(([label, count]) => ({ label, count }));
+}
+
+function buildOutputs(usernames, profiles, overlapProfiles) {
+  const exportedAt = new Date().toISOString();
+  const topicSummary = buildTopicSummary(profiles);
+  const notableAccounts = pickNotableAccounts(profiles);
+  const sourceLine = usernames.length === 1 ? `Source: @${usernames[0]}` : `Sources: ${usernames.map((name) => `@${name}`).join(", ")}`;
+  const overlapLines = overlapProfiles.slice(0, 25).map((profile) => {
+    const extras = [];
+    extras.push(`followed by ${profile.followed_by_count}/${usernames.length}`);
+    if (profile.topic_labels.length) extras.push(`topics: ${profile.topic_labels.join(", ")}`);
+    if (profile.bio) extras.push(profile.bio);
+    return `- @${profile.screen_name} — ${extras.join(" | ")}`;
+  });
+
+  const markdownLines = [
+    "# X Following",
+    "",
+    sourceLine,
+    `Exported at: ${exportedAt}`,
+    `Total: ${profiles.length}`,
+    `Overlap count: ${overlapProfiles.length}`,
+    "",
+    ...profiles.map((profile) => {
+      const detailParts = [];
+      if (profile.name) detailParts.push(profile.name);
+      if (profile.bio) detailParts.push(profile.bio);
+      if (profile.followers_count !== null) detailParts.push(`followers: ${profile.followers_count}`);
+      if (profile.followed_by_count) detailParts.push(`followed_by: ${profile.followed_by_count}/${usernames.length}`);
+      return `- @${profile.screen_name}${detailParts.length ? ` — ${detailParts.join(" | ")}` : ""}`;
+    }),
+  ];
+
+  const briefLines = [
+    `# Research Brief: ${usernames.map((name) => `@${name}`).join(", ")}`,
+    "",
+    `- Exported at: ${exportedAt}`,
+    `- Seed accounts: ${usernames.length}`,
+    `- Accounts analyzed: ${profiles.length}`,
+    `- Overlap accounts: ${overlapProfiles.length}`,
+    "",
+    "## Topic signals",
+    ...(topicSummary.length
+      ? topicSummary.map((item) => `- ${item.label}: ${item.count}`)
+      : ["- No strong topic clusters detected from bios."]),
+    "",
+    "## Shared follow graph",
+    ...(overlapLines.length ? overlapLines : ["- No overlapping followed accounts detected across the seed set."]),
+    "",
+    "## Potential hidden nodes",
+    ...(notableAccounts.length
+      ? notableAccounts.map((profile) => {
+          const extras = [];
+          if (profile.name) extras.push(profile.name);
+          if (profile.followed_by_count) extras.push(`followed by ${profile.followed_by_count}/${usernames.length}`);
+          if (profile.topic_labels.length) extras.push(`topics: ${profile.topic_labels.join(", ")}`);
+          extras.push(`followers: ${profile.followers_count}`);
+          if (profile.bio) extras.push(profile.bio);
+          return `- @${profile.screen_name} — ${extras.join(" | ")}`;
+        })
+      : ["- No notable hidden nodes detected."]),
+  ];
+
+  return {
+    markdown: markdownLines.join("\n"),
+    json: JSON.stringify(
+      {
+        source_usernames: usernames,
+        exported_at: exportedAt,
+        total: profiles.length,
+        overlap_count: overlapProfiles.length,
+        topic_summary: topicSummary,
+        overlap_profiles: overlapProfiles,
+        profiles,
+      },
+      null,
+      2
+    ),
+    brief: briefLines.join("\n"),
+    topicSummary,
+    notableAccounts,
+    overlapProfiles,
+    exportedAt,
+  };
 }
 
 async function getArcActiveTabState() {
@@ -108,8 +275,6 @@ async function pollArcHash(prefixes, timeoutMs) {
 }
 
 function buildFetchScript(username) {
-  const markdownKey = "codex_following_md_export";
-  const metaKey = "codex_following_meta_export";
   const js = `
     (async () => {
       try {
@@ -124,7 +289,7 @@ function buildFetchScript(username) {
         };
         let cursor = -1;
         let guard = 0;
-        const handles = [];
+        const profiles = [];
         while (cursor !== 0 && guard < 200) {
           const endpoint = "https://api.x.com/1.1/friends/list.json?screen_name=" + encodeURIComponent(username) + "&count=200&skip_status=true&include_user_entities=false&cursor=" + cursor;
           const response = await fetch(endpoint, { credentials: "include", headers });
@@ -136,30 +301,39 @@ function buildFetchScript(username) {
           const users = Array.isArray(data.users) ? data.users : [];
           for (const user of users) {
             if (user && user.screen_name) {
-              handles.push("@" + user.screen_name);
+              profiles.push({
+                screen_name: user.screen_name,
+                name: user.name || "",
+                bio: user.description || "",
+                location: user.location || "",
+                url: user.url || "",
+                verified: Boolean(user.verified),
+                protected: Boolean(user.protected),
+                followers_count: Number(user.followers_count || 0),
+                friends_count: Number(user.friends_count || 0),
+                statuses_count: Number(user.statuses_count || 0),
+                created_at: user.created_at || "",
+              });
             }
           }
           const nextCursor = Number(data.next_cursor_str || 0);
           cursor = Number.isFinite(nextCursor) ? nextCursor : 0;
           guard += 1;
         }
-        const uniqueHandles = [...new Set(handles)];
-        const markdown = [
-          "# X Following",
-          "",
-          "Source: @" + username,
-          "Exported at: " + new Date().toISOString(),
-          "Total: " + uniqueHandles.length,
-          "",
-          ...uniqueHandles.map((handle) => "- " + handle)
-        ].join("\\n");
-        localStorage.setItem(${JSON.stringify(markdownKey)}, markdown);
-        localStorage.setItem(${JSON.stringify(metaKey)}, JSON.stringify({
+        const deduped = [];
+        const seen = new Set();
+        for (const profile of profiles) {
+          if (seen.has(profile.screen_name)) continue;
+          seen.add(profile.screen_name);
+          deduped.push(profile);
+        }
+        const payload = JSON.stringify({
           username,
-          total: uniqueHandles.length,
-          length: markdown.length
-        }));
-        location.hash = "READY_" + uniqueHandles.length + "_" + markdown.length;
+          total: deduped.length,
+          profiles: deduped
+        });
+        localStorage.setItem(${JSON.stringify(EXPORT_KEY)}, payload);
+        location.hash = "READY_" + deduped.length + "_" + payload.length;
       } catch (error) {
         location.hash = "ERR_" + encodeURIComponent(String(error));
       }
@@ -172,7 +346,7 @@ function buildFetchScript(username) {
 function buildChunkScript(start, end) {
   const js = `
     (() => {
-      const text = localStorage.getItem("codex_following_md_export") || "";
+      const text = localStorage.getItem(${JSON.stringify(EXPORT_KEY)}) || "";
       location.hash = "CHUNK_${start}_" + encodeURIComponent(text.slice(${start}, ${end}));
     })();
     void 0;
@@ -180,9 +354,9 @@ function buildChunkScript(start, end) {
   return `javascript:${js.replace(/\n\s*/g, " ")}`;
 }
 
-async function collectMarkdown(totalLength) {
+async function collectExportPayload(totalLength) {
   const chunkSize = 1200;
-  let markdown = "";
+  let payload = "";
 
   for (let offset = 0; offset < totalLength; offset += chunkSize) {
     const end = Math.min(totalLength, offset + chunkSize);
@@ -194,40 +368,133 @@ async function collectMarkdown(totalLength) {
     if (markerIndex === -1) {
       throw new Error(`Failed to read chunk at offset ${offset}.`);
     }
-    markdown += decodeURIComponent(currentUrl.slice(markerIndex + marker.length));
+    payload += decodeURIComponent(currentUrl.slice(markerIndex + marker.length));
   }
 
-  return markdown;
+  return payload;
 }
 
-async function exportFollowing(usernameInput) {
-  const username = sanitizeUsername(usernameInput);
+function normalizeProfiles(rawProfiles) {
+  return (rawProfiles || []).map((profile) => ({
+    screen_name: profile.screen_name,
+    name: String(profile.name || ""),
+    bio: normalizeBio(profile.bio),
+    location: String(profile.location || ""),
+    url: String(profile.url || ""),
+    verified: Boolean(profile.verified),
+    protected: Boolean(profile.protected),
+    followers_count: Number(profile.followers_count || 0),
+    friends_count: Number(profile.friends_count || 0),
+    statuses_count: Number(profile.statuses_count || 0),
+    created_at: String(profile.created_at || ""),
+    topic_labels: classifyTopics({
+      name: profile.name,
+      bio: profile.bio,
+    }),
+  }));
+}
+
+async function exportSingleFollowing(username) {
+  await setArcUrl(buildFetchScript(username));
+
+  const { hash } = await pollArcHash(["READY_", "ERR_"], 120000);
+  if (hash.startsWith("ERR_")) {
+    throw new Error(`@${username}: ${decodeURIComponent(hash.slice(4))}`);
+  }
+
+  const [, totalText, lengthText] = hash.match(/^READY_(\d+)_(\d+)$/) || [];
+  if (!totalText || !lengthText) {
+    throw new Error(`Unexpected Arc response: ${hash}`);
+  }
+
+  const rawPayload = await collectExportPayload(Number(lengthText));
+  const parsedPayload = JSON.parse(rawPayload);
+
+  return {
+    username,
+    total: Number(totalText),
+    profiles: normalizeProfiles(parsedPayload.profiles),
+  };
+}
+
+async function exportFollowing(usernamesInput) {
+  const usernames = sanitizeUsernameList(usernamesInput);
   const initialState = await getArcActiveTabState();
 
   try {
     await setArcUrl("https://x.com/home");
     await sleep(3000);
-    await setArcUrl(buildFetchScript(username));
 
-    const { hash } = await pollArcHash(["READY_", "ERR_"], 120000);
-    if (hash.startsWith("ERR_")) {
-      throw new Error(decodeURIComponent(hash.slice(4)));
+    const exports = [];
+    for (const username of usernames) {
+      exports.push(await exportSingleFollowing(username));
+      await sleep(800);
     }
 
-    const [, totalText, lengthText] = hash.match(/^READY_(\d+)_(\d+)$/) || [];
-    if (!totalText || !lengthText) {
-      throw new Error(`Unexpected Arc response: ${hash}`);
+    const profileMap = new Map();
+    for (const item of exports) {
+      for (const profile of item.profiles) {
+        const existing = profileMap.get(profile.screen_name);
+        if (!existing) {
+          profileMap.set(profile.screen_name, {
+            ...profile,
+            followed_by: [item.username],
+          });
+          continue;
+        }
+        if (!existing.followed_by.includes(item.username)) {
+          existing.followed_by.push(item.username);
+        }
+        if ((!existing.bio || existing.bio.length < profile.bio.length) && profile.bio) {
+          existing.bio = profile.bio;
+        }
+        if ((!existing.name || existing.name.length < profile.name.length) && profile.name) {
+          existing.name = profile.name;
+        }
+        if (!existing.url && profile.url) existing.url = profile.url;
+        if (!existing.location && profile.location) existing.location = profile.location;
+        if (profile.followers_count > existing.followers_count) existing.followers_count = profile.followers_count;
+        if (profile.friends_count > existing.friends_count) existing.friends_count = profile.friends_count;
+        if (profile.statuses_count > existing.statuses_count) existing.statuses_count = profile.statuses_count;
+        if (profile.verified) existing.verified = true;
+        if (profile.protected) existing.protected = true;
+        existing.topic_labels = [...new Set([...(existing.topic_labels || []), ...(profile.topic_labels || [])])];
+      }
     }
 
-    const total = Number(totalText);
-    const markdownLength = Number(lengthText);
-    const markdown = await collectMarkdown(markdownLength);
+    const profiles = [...profileMap.values()]
+      .map((profile) => ({
+        ...profile,
+        followed_by: [...profile.followed_by].sort(),
+        followed_by_count: profile.followed_by.length,
+      }))
+      .sort((left, right) => {
+        if (right.followed_by_count !== left.followed_by_count) {
+          return right.followed_by_count - left.followed_by_count;
+        }
+        return left.screen_name.localeCompare(right.screen_name);
+      });
+
+    const overlapProfiles = profiles.filter((profile) => profile.followed_by_count > 1);
+    const outputs = buildOutputs(usernames, profiles, overlapProfiles);
+    const today = new Date().toISOString().slice(0, 10);
+    const stem = usernames.length === 1 ? usernames[0] : `${usernames[0]}-and-${usernames.length - 1}-more`;
 
     return {
-      username,
-      total,
-      markdown,
-      filename: `${username}-following-${new Date().toISOString().slice(0, 10)}.md`,
+      usernames,
+      total: profiles.length,
+      overlapCount: overlapProfiles.length,
+      sources: exports.map((item) => ({
+        username: item.username,
+        total: item.total,
+      })),
+      profiles,
+      outputs,
+      files: {
+        markdown: `${stem}-following-${today}.md`,
+        json: `${stem}-following-${today}.json`,
+        brief: `${stem}-following-brief-${today}.md`,
+      },
     };
   } finally {
     if (initialState.url) {
@@ -280,7 +547,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && req.url === "/api/export") {
       const rawBody = await readRequestBody(req);
       const body = rawBody ? JSON.parse(rawBody) : {};
-      const result = await exportFollowing(body.username);
+      const result = await exportFollowing(body.usernames || body.username);
       sendJson(res, 200, result);
       return;
     }
