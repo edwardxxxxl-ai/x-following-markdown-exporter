@@ -6,15 +6,16 @@
 
 ## English
 
-Local web app that exports an X account's following list as Markdown by reusing your logged-in Arc session on macOS.
+Local web app for mapping X follow graphs on macOS by reusing your logged-in Arc session.
 
 ### What It Does
 
-- Input any X handle, such as `@odysseyml`
+- Input one or more X handles
 - Reuse your active Arc login session for X
-- Fetch that account's following list
-- Generate Markdown output
-- Copy or download the result as a `.md` file
+- Fetch following lists as structured account profiles
+- Compute overlap across multiple seed accounts
+- Rank accounts with an overlap-first, small-but-important discovery score
+- Export Markdown, JSON, and a research brief
 
 ### How It Works
 
@@ -25,8 +26,10 @@ Instead, it:
 1. Runs a local Node server
 2. Temporarily switches the active Arc tab to `x.com/home`
 3. Executes a small in-page script through Arc AppleScript support
-4. Reads the following list through X's current web endpoints
-5. Returns the result to the local web app as Markdown
+4. Reads following lists through X's current web endpoints
+5. Enriches each account with profile metadata and topic labels
+6. Computes overlap and discovery ranking
+7. Returns the result to the local web app as Markdown, JSON, and a research brief
 
 This makes the tool easy to run locally, but also tightly couples it to:
 
@@ -63,21 +66,49 @@ Accepted input examples:
 
 - `odysseyml`
 - `@odysseyml`
+- `odysseyml reflexrobot`
+- one handle per line
 
-### Output Format
+### Output
 
-Example output:
+The app currently generates:
+
+- `Markdown`
+- `JSON`
+- `Research brief`
+
+Profile fields include:
+
+- `screen_name`
+- `name`
+- `bio`
+- `location`
+- `url`
+- `followers_count`
+- `friends_count`
+- `statuses_count`
+- `verified`
+- `protected`
+- `created_at`
+- `topic_labels`
+- `followed_by`
+- `followed_by_count`
+- `discovery_score`
+
+Example brief excerpt:
 
 ```md
-# X Following
+# Research Brief: @odysseyml, @reflexrobot
 
-Source: @odysseyml
-Exported at: 2026-03-06T03:08:15.471Z
-Total: 5
+- Seed accounts: 2
+- Accounts analyzed: 6
+- Overlap accounts: 0
+- Ranking logic: prioritize multi-seed overlap first, then rank for small-but-important accounts.
 
-- @HuangRenee3
-- @JonathanSadeghi
-- @BreezeChai
+## Potential hidden nodes
+
+- @JonathanSadeghi — followed by 1/2 | score: 1285 | topics: AI, Research
+- @rragavender — followed by 1/2 | score: 1250 | topics: Robotics
 ```
 
 ### Project Structure
@@ -95,6 +126,7 @@ public/styles.css   Frontend styling
 - X may change internal endpoints at any time
 - If Arc blocks AppleScript or X changes page behavior, the exporter may break
 - The app temporarily reuses the active Arc tab and then restores its URL
+- Discovery ranking is heuristic, not ground truth
 
 ### Safety Notes
 
@@ -106,15 +138,16 @@ Review the code before using it with any sensitive account.
 
 ## 中文说明
 
-这是一个本地网页工具：在 macOS 上复用你已经登录在 Arc 里的 X 会话，把任意账号的关注列表导出成 Markdown。
+这是一个本地网页工具：在 macOS 上复用你已经登录在 Arc 里的 X 会话，分析一个或多个账号的关注图谱。
 
 ### 它能做什么
 
-- 输入任意 X 用户名，例如 `@odysseyml`
+- 输入一个或多个 X 用户名
 - 复用你当前 Arc 中的 X 登录态
-- 抓取该账号的关注列表
-- 生成 Markdown 文本
-- 支持复制或下载为 `.md` 文件
+- 抓取 following 列表并转成结构化账号画像
+- 计算多个种子账号之间的共同关注
+- 按“先看共同关注，再看小而关键”排序
+- 导出 Markdown、JSON 和研究简报
 
 ### 工作原理
 
@@ -125,8 +158,10 @@ Review the code before using it with any sensitive account.
 1. 在本机启动一个 Node 服务
 2. 临时把 Arc 当前标签切到 `x.com/home`
 3. 通过 Arc 的 AppleScript 能力注入一小段页内脚本
-4. 读取 X 当前网页可用的关注列表接口
-5. 把结果回传给本地网页，并生成 Markdown
+4. 读取 X 当前网页可用的 following 接口
+5. 补齐 bio、粉丝数、链接等资料
+6. 计算交集、主题标签和 discovery score
+7. 把结果回传给本地网页，并生成多种输出
 
 这也意味着它依赖以下前提：
 
@@ -159,26 +194,44 @@ http://127.0.0.1:4321
 
 ### 输入格式
 
-支持下面两种形式：
+支持下面几种形式：
 
 - `odysseyml`
 - `@odysseyml`
+- `odysseyml reflexrobot`
+- 每行一个账号
 
-### 输出格式
+### 输出内容
 
-输出结果是 Markdown，例如：
+目前支持三种输出：
 
-```md
-# X Following
+- Markdown
+- JSON
+- 研究简报
 
-Source: @odysseyml
-Exported at: 2026-03-06T03:08:15.471Z
-Total: 5
+账号画像字段包括：
 
-- @HuangRenee3
-- @JonathanSadeghi
-- @BreezeChai
-```
+- `screen_name`
+- `name`
+- `bio`
+- `location`
+- `url`
+- `followers_count`
+- `friends_count`
+- `statuses_count`
+- `verified`
+- `protected`
+- `created_at`
+- `topic_labels`
+- `followed_by`
+- `followed_by_count`
+- `discovery_score`
+
+研究简报会额外给出：
+
+- 主题信号
+- 共同关注列表
+- 优先研究账号排序
 
 ### 项目结构
 
@@ -195,6 +248,7 @@ public/styles.css   前端样式
 - X 内部网页接口未来可能随时变动
 - 如果 Arc 限制 AppleScript，或 X 改了页面逻辑，这个工具就可能失效
 - 工具会临时复用当前 Arc 活动标签页，完成后再把 URL 切回去
+- discovery score 是启发式排序，不是绝对结论
 
 ### 安全说明
 

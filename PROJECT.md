@@ -10,25 +10,27 @@ Content infrastructure
 
 ## Subtype
 
-Social graph export and audience research tool
+Social graph discovery and audience research tool
 
 ## Positioning
 
-This is a local automation tool that exports the following list of any X account into Markdown by reusing an authenticated Arc browser session on macOS.
+This is a local automation tool that maps X follow graphs by reusing an authenticated Arc browser session on macOS. It supports multi-account overlap analysis, structured profile export, and heuristic discovery ranking.
 
 ## Primary Use Cases
 
-- Export an account's following list for research
-- Turn social graph data into reusable Markdown assets
-- Support content workflows, audience mapping, and trend tracking
+- Analyze who multiple seed accounts jointly follow
+- Turn follow graph data into reusable Markdown, JSON, and briefing assets
+- Support content workflows, audience mapping, trend tracking, and hidden-node discovery
 - Provide a local-first alternative to building against the official X API
 
 ## Current Scope
 
-- Input one X handle
-- Fetch the account's following list
-- Render Markdown in a local web UI
-- Copy or download the result as a `.md` file
+- Input one or more X handles
+- Fetch following lists through Arc/X session reuse
+- Build structured profile records
+- Compute overlap and `followed_by_count`
+- Compute heuristic `discovery_score`
+- Render Markdown, JSON, and research brief outputs in a local web UI
 
 ## Non-Goals For Now
 

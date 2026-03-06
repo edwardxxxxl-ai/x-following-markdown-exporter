@@ -2,18 +2,20 @@
 
 ## Product
 
-- Support batch export for multiple X handles
-- Add CSV and JSON export options
+- Add a dedicated "overlap only" view
+- Add a dedicated "top discoveries" leaderboard
+- Add CSV export
 - Add a "save to Desktop" button
 - Show richer progress states during long exports
 - Add error messages for private, suspended, or missing accounts
+- Add per-account profile cards in the UI
 
 ## Engineering
 
-- Rename local folder to match repo name everywhere
 - Add a safer tab restore flow
 - Add retries for transient X request failures
-- Add input normalization and better server-side validation
+- Add stronger discovery-score tuning and weighting controls
+- Add support for exporting raw source-by-source following lists
 - Clean up unused preview assets if no longer needed
 
 ## Compatibility
@@ -25,7 +27,6 @@
 
 ## Documentation
 
-- Replace any placeholder visuals with real product assets
 - Add a short demo GIF
 - Add troubleshooting notes
 - Add a changelog once the project starts evolving
